@@ -457,6 +457,18 @@ class DentalArchiveApp:
             lines.append(f"Modality: {item.modality}")
         if item.duplicate_of:
             lines.append(f"Оригінал дубліката: {item.duplicate_of}")
+        if item.metadata.get("series"):
+            lines.append(f"Серія знімків: {item.metadata['series']}")
+        if item.metadata.get("patient_context"):
+            lines.append(f"Пацієнта визначено: {item.metadata['patient_context']}")
+        if item.links:
+            lines.extend(("", f"Пов'язані елементи ({len(item.links)}):"))
+            for link in item.links[:10]:
+                other = self.item_by_id.get(link["item_id"])
+                label = other.display_name if other else "(поза списком)"
+                lines.append(f"• {label} — {link['relation']}")
+            if len(item.links) > 10:
+                lines.append(f"… та ще {len(item.links) - 10}")
         lines.extend(("", "Шлях:", str(item.primary_path)))
 
         self.detail_text.configure(state="normal")

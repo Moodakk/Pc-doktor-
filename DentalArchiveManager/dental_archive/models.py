@@ -103,6 +103,7 @@ class ScanItem:
     action: Action = Action.KEEP
     selected: bool = False
     duplicate_of: str = ""
+    links: list[dict[str, str]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     item_id: str = field(default_factory=lambda: uuid4().hex)
 
@@ -113,6 +114,11 @@ class ScanItem:
     @property
     def primary_path(self) -> Path:
         return self.paths[0]
+
+    def add_link(self, other: "ScanItem", relation: str) -> None:
+        if any(link["item_id"] == other.item_id for link in self.links):
+            return
+        self.links.append({"item_id": other.item_id, "relation": relation})
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
