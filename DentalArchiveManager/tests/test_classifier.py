@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from dental_archive.classifier import classify_dicom, classify_regular_file, read_dicom_info
@@ -42,6 +43,45 @@ class ClassifierTests(unittest.TestCase):
     def test_zero_byte_is_cleanup_candidate(self) -> None:
         result = classify_regular_file(Path("empty.any"), 0)
         self.assertEqual(result.category, Category.JUNK)
+
+    def test_extensionless_jpeg_detected_by_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "export_0012"
+            path.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 32)
+            result = classify_regular_file(path)
+            self.assertEqual(result.category, Category.IMAGE_REVIEW)
+            self.assertIn("сигнатурою", result.reason)
+
+    def test_wrong_extension_is_reclassified_by_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "notes.doc"
+            path.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 32)
+            result = classify_regular_file(path)
+            self.assertEqual(result.category, Category.IMAGE_REVIEW)
+            self.assertIn("не відповідає вмісту", result.reason)
+
+    def test_docx_zip_container_is_not_a_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.docx"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("word/document.xml", "<xml/>")
+            result = classify_regular_file(path)
+            self.assertEqual(result.category, Category.DOCUMENT)
+            self.assertNotIn("не відповідає", result.reason)
+
+    def test_renamed_dicom_keyword_still_wins_for_content_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "RVG"
+            folder.mkdir()
+            path = folder / "tooth.dat"
+            path.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 32)
+            result = classify_regular_file(path)
+            self.assertEqual(result.category, Category.XRAY)
+
+    def test_video_extension_reported(self) -> None:
+        result = classify_regular_file(Path("intraoral.mp4"), 100)
+        self.assertEqual(result.category, Category.OTHER)
+        self.assertIn("Відеофайл", result.reason)
 
 
 if __name__ == "__main__":
