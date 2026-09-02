@@ -6,8 +6,13 @@ import zipfile
 from pathlib import Path
 
 from dental_archive.classifier import classify_dicom, classify_regular_file, read_dicom_info
+from dental_archive.i18n import set_language
 from dental_archive.models import Action, Category
 from tests.helpers import write_test_dicom
+
+
+def setUpModule() -> None:
+    set_language("uk", persist=False)
 
 
 class ClassifierTests(unittest.TestCase):
@@ -78,10 +83,60 @@ class ClassifierTests(unittest.TestCase):
             result = classify_regular_file(path)
             self.assertEqual(result.category, Category.XRAY)
 
-    def test_video_extension_reported(self) -> None:
+    def test_video_extension_gets_video_category(self) -> None:
         result = classify_regular_file(Path("intraoral.mp4"), 100)
-        self.assertEqual(result.category, Category.OTHER)
+        self.assertEqual(result.category, Category.VIDEO)
+        self.assertEqual(result.suggested_action, Action.KEEP)
         self.assertIn("Відеофайл", result.reason)
+        for extension in (".mpg", ".3gp", ".flv", ".webm"):
+            self.assertEqual(classify_regular_file(Path(f"clip{extension}"), 100).category, Category.VIDEO)
+
+    def test_volume_extensions_go_to_ct(self) -> None:
+        for name in ("scan.nrrd", "scan.nii", "scan.mha", "scan.mhd", "scan.vtk"):
+            result = classify_regular_file(Path(name), 100)
+            self.assertEqual(result.category, Category.CT, name)
+            self.assertEqual(result.confidence, "medium", name)
+            self.assertEqual(result.suggested_action, Action.COPY, name)
+
+    def test_compressed_nifti_double_extension(self) -> None:
+        result = classify_regular_file(Path("volume.nii.gz"), 100)
+        self.assertEqual(result.category, Category.CT)
+        self.assertIn(".nii.gz", result.reason)
+
+    def test_volume_signature_without_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "export_volume"
+            path.write_bytes(b"NRRD0004\n# Complete NRRD file format\n" + b"\x00" * 16)
+            result = classify_regular_file(path)
+            self.assertEqual(result.category, Category.CT)
+            self.assertIn("nrrd", result.reason)
+
+    def test_dicom_structured_report_is_document_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.dcm"
+            write_test_dicom(path, modality="SR")
+            result = classify_dicom(read_dicom_info(path))
+            self.assertEqual(result.category, Category.DICOM_OTHER)
+            self.assertIn("DICOM-обгортці", result.reason)
+
+    def test_dicom_encapsulated_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.dcm"
+            write_test_dicom(path, modality="OT", sop_class_uid="1.2.840.10008.5.1.4.1.1.104.1")
+            info = read_dicom_info(path)
+            self.assertEqual(info.sop_class_uid, "1.2.840.10008.5.1.4.1.1.104.1")
+            result = classify_dicom(info)
+            self.assertEqual(result.category, Category.DICOM_OTHER)
+            self.assertIn("PDF", result.reason)
+
+    def test_dicom_ultrasound_and_mri_named_in_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for modality in ("US", "MR"):
+                path = Path(directory) / f"{modality.lower()}.dcm"
+                write_test_dicom(path, modality=modality)
+                result = classify_dicom(read_dicom_info(path))
+                self.assertEqual(result.category, Category.DICOM_OTHER)
+                self.assertIn(modality, result.reason)
 
 
 if __name__ == "__main__":

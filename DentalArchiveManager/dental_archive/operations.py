@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
 import shutil
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
+from . import __version__
+from .i18n import tr
 from .models import Action, OperationRecord, ScanItem
 from .scanner import sha256_file
 
@@ -118,7 +122,7 @@ def copy_verified(source: Path, requested_destination: Path) -> tuple[Path, str,
         shutil.copy2(source, temporary)
         destination_hash = sha256_file(temporary)
         if destination_hash != source_hash or temporary.stat().st_size != source.stat().st_size:
-            raise IOError("SHA-256 або розмір копії не збігається з джерелом")
+            raise IOError(tr("op.copy_mismatch"))
         temporary.replace(destination)
     finally:
         if temporary.exists():
@@ -126,21 +130,55 @@ def copy_verified(source: Path, requested_destination: Path) -> tuple[Path, str,
     return destination, source_hash, destination_hash, False
 
 
-def _write_manifest(summary: RunSummary, destination_root: Path, started_at: datetime) -> Path:
+def _write_manifest(
+    summary: RunSummary,
+    destination_root: Path,
+    started_at: datetime,
+    sources: list[str],
+) -> Path:
     log_directory = destination_root / "_DentalArchive_Logs"
     log_directory.mkdir(parents=True, exist_ok=True)
     stamp = started_at.strftime("%Y%m%d_%H%M%S")
     manifest = log_directory / f"operation_{stamp}.json"
+    action_totals = Counter(record.action for record in summary.records)
     payload = {
         "app": "Dental Archive Manager",
+        "app_version": __version__,
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": datetime.now().isoformat(timespec="seconds"),
+        "sources": sources,
+        "destination": str(destination_root),
+        "action_totals": dict(sorted(action_totals.items())),
         "records": [record.to_dict() for record in summary.records],
         "succeeded": summary.succeeded,
         "failed": summary.failed,
     }
     manifest.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_manifest_csv(summary, log_directory / f"operation_{stamp}.csv")
     return manifest
+
+
+def _write_manifest_csv(summary: RunSummary, path: Path) -> None:
+    # UTF-8 with BOM so Excel opens Cyrillic text correctly.
+    with path.open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.writer(stream, delimiter=";")
+        writer.writerow(
+            ["item_id", "action", "status", "source", "destination", "size", "sha256_source", "sha256_destination", "message"]
+        )
+        for record in summary.records:
+            writer.writerow(
+                [
+                    record.item_id,
+                    record.action,
+                    record.status,
+                    record.source,
+                    record.destination,
+                    record.size,
+                    record.sha256_source,
+                    record.sha256_destination,
+                    record.message,
+                ]
+            )
 
 
 def execute_plan(
@@ -149,6 +187,7 @@ def execute_plan(
     *,
     progress: OperationProgress | None = None,
     trash_function: TrashFunction | None = None,
+    sources: Iterable[Path] | None = None,
 ) -> RunSummary:
     selected = [item for item in items if item.selected and item.action != Action.KEEP]
     destination_root = destination_root.expanduser().resolve()
@@ -158,7 +197,7 @@ def execute_plan(
 
     if trash_function is None:
         if send2trash is None:
-            raise RuntimeError("Send2Trash не встановлено; безпечне переміщення до Кошика недоступне")
+            raise RuntimeError(tr("op.send2trash_missing"))
         trash_function = send2trash
 
     total_files = sum(item.file_count for item in selected)
@@ -168,13 +207,13 @@ def execute_plan(
             record = OperationRecord(item_id=item.item_id, action=item.action.value, source=str(source), size=0)
             try:
                 if not source.exists() or not source.is_file():
-                    raise FileNotFoundError(f"Файл не знайдено: {source}")
+                    raise FileNotFoundError(tr("op.file_not_found", path=source))
                 record.size = source.stat().st_size
 
                 if item.action == Action.TRASH:
                     trash_function(str(source))
                     record.status = "ok"
-                    record.message = "Переміщено до системного Кошика"
+                    record.message = tr("op.trashed")
                 else:
                     destination = destination_for(
                         item,
@@ -184,7 +223,7 @@ def execute_plan(
                     )
                     try:
                         if source.resolve() == destination.resolve():
-                            raise ValueError("Джерело і місце призначення збігаються")
+                            raise ValueError(tr("op.same_source_destination"))
                     except FileNotFoundError:
                         pass
                     copied_to, source_hash, destination_hash, already_present = copy_verified(source, destination)
@@ -192,11 +231,11 @@ def execute_plan(
                     record.sha256_source = source_hash
                     record.sha256_destination = destination_hash
                     record.status = "already_present" if already_present else "ok"
-                    record.message = "Копія вже існувала і пройшла SHA-256" if already_present else "Копію перевірено SHA-256"
+                    record.message = tr("op.copied_already") if already_present else tr("op.copied_verified")
 
                     if item.action in {Action.MOVE, Action.QUARANTINE}:
                         trash_function(str(source))
-                        record.message += "; джерело переміщено до Кошика"
+                        record.message += tr("op.source_trashed")
             except Exception as exc:  # Continue the batch and preserve a complete audit trail.
                 record.status = "error"
                 record.message = str(exc)
@@ -205,5 +244,6 @@ def execute_plan(
             if progress:
                 progress(completed, total_files, str(source))
 
-    summary.manifest_path = _write_manifest(summary, destination_root, started_at)
+    source_list = sorted({str(source) for source in sources}) if sources else sorted({str(item.source_root) for item in selected})
+    summary.manifest_path = _write_manifest(summary, destination_root, started_at, source_list)
     return summary

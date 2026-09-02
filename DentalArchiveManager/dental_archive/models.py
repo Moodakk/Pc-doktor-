@@ -16,25 +16,16 @@ class Category(str, Enum):
     DOCUMENT = "documents"
     DICOM_OTHER = "dicom_other"
     ARCHIVE = "archives"
+    VIDEO = "video"
     DUPLICATE = "duplicates"
     JUNK = "cleanup_candidates"
     OTHER = "other"
 
     @property
     def label(self) -> str:
-        return {
-            Category.CT: "КТ / CBCT",
-            Category.XRAY: "Рентгени",
-            Category.PHOTO: "Фото пацієнтів",
-            Category.IMAGE_REVIEW: "Зображення — перевірити",
-            Category.MODEL_3D: "3D-моделі / скани",
-            Category.DOCUMENT: "Документи",
-            Category.DICOM_OTHER: "Інший DICOM",
-            Category.ARCHIVE: "Архіви",
-            Category.DUPLICATE: "Точні дублікати",
-            Category.JUNK: "Кандидати на очищення",
-            Category.OTHER: "Інше",
-        }[self]
+        from .i18n import tr
+
+        return tr(f"category.{self.value}")
 
     @property
     def folder_name(self) -> str:
@@ -47,6 +38,7 @@ class Category(str, Enum):
             Category.DOCUMENT: "06_DOCUMENTS",
             Category.DICOM_OTHER: "07_DICOM_OTHER",
             Category.ARCHIVE: "08_ARCHIVES",
+            Category.VIDEO: "09_VIDEO",
             Category.DUPLICATE: "90_DUPLICATES",
             Category.JUNK: "91_CLEANUP_CANDIDATES",
             Category.OTHER: "99_OTHER",
@@ -62,13 +54,9 @@ class Action(str, Enum):
 
     @property
     def label(self) -> str:
-        return {
-            Action.KEEP: "Залишити",
-            Action.COPY: "Копіювати",
-            Action.MOVE: "Перенести",
-            Action.QUARANTINE: "У карантин",
-            Action.TRASH: "До Кошика",
-        }[self]
+        from .i18n import tr
+
+        return tr(f"action.{self.value}")
 
 
 @dataclass(slots=True)
@@ -83,6 +71,7 @@ class DicomInfo:
     study_description: str = ""
     series_description: str = ""
     body_part: str = ""
+    sop_class_uid: str = ""
     error: str = ""
 
 

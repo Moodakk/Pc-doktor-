@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .filetype import Kind, SniffResult, extension_matches, sniff_format
+from .i18n import tr
 from .models import Action, Category, DicomInfo
 
 try:
@@ -42,7 +43,8 @@ DOCUMENT_EXTENSIONS = {
     ".odt",
 }
 ARCHIVE_EXTENSIONS = {".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".iso"}
-VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".avi", ".mkv", ".wmv"}
+VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".avi", ".mkv", ".wmv", ".mpg", ".mpeg", ".3gp", ".flv", ".webm"}
+VOLUME_EXTENSIONS = {".nii", ".nrrd", ".mha", ".mhd", ".vtk"}
 TEMP_EXTENSIONS = {".tmp", ".temp", ".part", ".crdownload", ".download", ".dmp", ".chk"}
 JUNK_FILENAMES = {"thumbs.db", "desktop.ini", ".ds_store"}
 
@@ -52,11 +54,16 @@ KNOWN_EXTENSIONS = (
     | DOCUMENT_EXTENSIONS
     | ARCHIVE_EXTENSIONS
     | VIDEO_EXTENSIONS
+    | VOLUME_EXTENSIONS
     | {".xml", ".json", ".html", ".htm", ".dcm", ".dicom"}
 )
 
 CT_MODALITIES = {"CT", "CBCT"}
 XRAY_MODALITIES = {"DX", "CR", "DR", "IO", "PX", "RF", "XA", "MG", "OP", "PAN"}
+# Modalities that wrap documents/reports rather than images.
+DOCUMENT_MODALITIES = {"SR", "DOC", "KO"}
+ENCAPSULATED_PDF_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.104.1"
+MEDIA_DIRECTORY_SOP_CLASS = "1.2.840.10008.1.3.10"
 
 XRAY_KEYWORDS = {
     "xray",
@@ -126,7 +133,7 @@ def looks_like_dicom(path: Path) -> bool:
 
 def read_dicom_info(path: Path) -> DicomInfo:
     if pydicom is None:
-        return DicomInfo(is_dicom=looks_like_dicom(path), error="pydicom не встановлено")
+        return DicomInfo(is_dicom=looks_like_dicom(path), error=tr("reason.pydicom_missing"))
 
     # Do not probe every arbitrary file with force=True; it is slow and may produce false positives.
     candidate = looks_like_dicom(path) or path.suffix == ""
@@ -174,17 +181,32 @@ def read_dicom_info(path: Path) -> DicomInfo:
         study_description=value("StudyDescription"),
         series_description=value("SeriesDescription"),
         body_part=value("BodyPartExamined"),
+        sop_class_uid=value("SOPClassUID"),
     )
 
 
 def classify_dicom(info: DicomInfo) -> FileClassification:
     modality = info.modality.upper()
     descriptions = f"{info.study_description} {info.series_description}".casefold()
-    if modality in CT_MODALITIES or contains_keyword(descriptions, CT_KEYWORDS):
-        return FileClassification(Category.CT, f"DICOM modality: {modality or 'CT/CBCT description'}", "high", Action.COPY)
-    if modality in XRAY_MODALITIES or contains_keyword(descriptions, XRAY_KEYWORDS):
-        return FileClassification(Category.XRAY, f"DICOM modality: {modality or 'рентген-опис'}", "high", Action.COPY)
-    return FileClassification(Category.DICOM_OTHER, f"DICOM modality: {modality or 'невказана'}", "high", Action.COPY)
+    if modality in CT_MODALITIES:
+        return FileClassification(Category.CT, tr("reason.dicom_modality", modality=modality), "high", Action.COPY)
+    if contains_keyword(descriptions, CT_KEYWORDS):
+        return FileClassification(Category.CT, tr("reason.dicom_ct_description"), "high", Action.COPY)
+    if modality in XRAY_MODALITIES:
+        return FileClassification(Category.XRAY, tr("reason.dicom_modality", modality=modality), "high", Action.COPY)
+    if contains_keyword(descriptions, XRAY_KEYWORDS):
+        return FileClassification(Category.XRAY, tr("reason.dicom_xray_description"), "high", Action.COPY)
+    if info.sop_class_uid == ENCAPSULATED_PDF_SOP_CLASS:
+        return FileClassification(Category.DICOM_OTHER, tr("reason.dicom_encapsulated_pdf"), "high", Action.COPY)
+    if info.sop_class_uid == MEDIA_DIRECTORY_SOP_CLASS:
+        return FileClassification(Category.DICOM_OTHER, tr("reason.dicomdir"), "high", Action.COPY)
+    if modality in DOCUMENT_MODALITIES:
+        return FileClassification(
+            Category.DICOM_OTHER, tr("reason.dicom_document", modality=modality), "high", Action.COPY
+        )
+    if modality:
+        return FileClassification(Category.DICOM_OTHER, tr("reason.dicom_modality", modality=modality), "high", Action.COPY)
+    return FileClassification(Category.DICOM_OTHER, tr("reason.dicom_unspecified"), "high", Action.COPY)
 
 
 def _join_reason(base: str, note: str) -> str:
@@ -193,12 +215,12 @@ def _join_reason(base: str, note: str) -> str:
 
 def _classify_image(text: str, note: str = "") -> FileClassification:
     if contains_keyword(text, XRAY_KEYWORDS):
-        return FileClassification(Category.XRAY, _join_reason("Назва або папка містить рентген-ознаку", note), "medium", Action.COPY)
+        return FileClassification(Category.XRAY, _join_reason(tr("reason.xray_keyword"), note), "medium", Action.COPY)
     if contains_keyword(text, PHOTO_KEYWORDS):
-        return FileClassification(Category.PHOTO, _join_reason("Назва або папка містить ознаку фото пацієнта", note), "medium", Action.COPY)
+        return FileClassification(Category.PHOTO, _join_reason(tr("reason.photo_keyword"), note), "medium", Action.COPY)
     return FileClassification(
         Category.IMAGE_REVIEW,
-        _join_reason("Звичайне зображення без достатніх ознак типу", note),
+        _join_reason(tr("reason.plain_image"), note),
         "low",
         Action.COPY,
     )
@@ -208,17 +230,27 @@ def _classify_by_content(sniffed: SniffResult, text: str, note: str) -> FileClas
     if sniffed.kind == Kind.IMAGE:
         return _classify_image(text, note)
     if sniffed.kind == Kind.MODEL_3D:
-        return FileClassification(Category.MODEL_3D, _join_reason(f"3D-модель ({sniffed.format_name})", note), "medium", Action.COPY)
+        return FileClassification(
+            Category.MODEL_3D, _join_reason(tr("reason.model_3d_content", format=sniffed.format_name), note), "medium", Action.COPY
+        )
     if sniffed.kind == Kind.DOCUMENT:
-        return FileClassification(Category.DOCUMENT, _join_reason(f"Документ ({sniffed.format_name})", note), "medium", Action.COPY)
+        return FileClassification(
+            Category.DOCUMENT, _join_reason(tr("reason.document_content", format=sniffed.format_name), note), "medium", Action.COPY
+        )
     if sniffed.kind == Kind.ARCHIVE:
         return FileClassification(
             Category.ARCHIVE,
-            _join_reason(f"Архів ({sniffed.format_name}); вміст не розпаковувався", note),
+            _join_reason(tr("reason.archive_content", format=sniffed.format_name), note),
             "medium",
             Action.COPY,
         )
-    return FileClassification(Category.OTHER, _join_reason(f"Відеофайл ({sniffed.format_name})", note), "medium", Action.KEEP)
+    if sniffed.kind == Kind.VOLUME:
+        return FileClassification(
+            Category.CT, _join_reason(tr("reason.volume_content", format=sniffed.format_name), note), "medium", Action.COPY
+        )
+    return FileClassification(
+        Category.VIDEO, _join_reason(tr("reason.video_content", format=sniffed.format_name), note), "medium", Action.KEEP
+    )
 
 
 def classify_regular_file(path: Path, size: int | None = None) -> FileClassification:
@@ -232,45 +264,51 @@ def classify_regular_file(path: Path, size: int | None = None) -> FileClassifica
             size = -1
 
     if size == 0:
-        return FileClassification(Category.JUNK, "Порожній файл (0 байт)", "high", Action.QUARANTINE)
+        return FileClassification(Category.JUNK, tr("reason.empty_file"), "high", Action.QUARANTINE)
     if name in JUNK_FILENAMES or name.startswith("~$"):
-        return FileClassification(Category.JUNK, "Системний або тимчасовий службовий файл", "high", Action.QUARANTINE)
+        return FileClassification(Category.JUNK, tr("reason.system_temp_file"), "high", Action.QUARANTINE)
     if extension in TEMP_EXTENSIONS:
-        return FileClassification(Category.JUNK, f"Незавершений/тимчасовий файл {extension}", "high", Action.QUARANTINE)
+        return FileClassification(Category.JUNK, tr("reason.temp_extension", extension=extension), "high", Action.QUARANTINE)
+
+    # Compressed NIfTI volumes carry a double extension, so check the name first.
+    if name.endswith(".nii.gz"):
+        return FileClassification(Category.CT, tr("reason.volume_extension", extension=".nii.gz"), "medium", Action.COPY)
 
     # The real content decides when the extension is missing, unknown or lies.
     sniffed = sniff_format(path, size if size >= 0 else None)
     if sniffed and not extension_matches(extension, sniffed):
         if not extension:
-            note = f"файл без розширення, вміст визначено за сигнатурою: {sniffed.format_name}"
+            note = tr("note.no_extension", format=sniffed.format_name)
         elif extension in KNOWN_EXTENSIONS:
-            note = f"розширення {extension} не відповідає вмісту ({sniffed.format_name})"
+            note = tr("note.extension_mismatch", extension=extension, format=sniffed.format_name)
         else:
-            note = f"невідоме розширення {extension}, вміст: {sniffed.format_name}"
+            note = tr("note.unknown_extension", extension=extension, format=sniffed.format_name)
         return _classify_by_content(sniffed, text, note)
 
     if extension in IMAGE_EXTENSIONS:
         return _classify_image(text)
 
     if extension in MODEL_EXTENSIONS:
-        return FileClassification(Category.MODEL_3D, f"Формат 3D-моделі {extension}", "high", Action.COPY)
+        return FileClassification(Category.MODEL_3D, tr("reason.model_3d_extension", extension=extension), "high", Action.COPY)
+    if extension in VOLUME_EXTENSIONS:
+        return FileClassification(Category.CT, tr("reason.volume_extension", extension=extension), "medium", Action.COPY)
     if extension in DOCUMENT_EXTENSIONS:
-        return FileClassification(Category.DOCUMENT, f"Формат документа {extension}", "high", Action.COPY)
+        return FileClassification(Category.DOCUMENT, tr("reason.document_extension", extension=extension), "high", Action.COPY)
     if extension in ARCHIVE_EXTENSIONS:
         if contains_keyword(text, CT_KEYWORDS | XRAY_KEYWORDS):
-            return FileClassification(Category.ARCHIVE, "Архів із КТ/рентген-ознаками у назві", "medium", Action.COPY)
-        return FileClassification(Category.ARCHIVE, f"Архів {extension}; вміст не розпаковувався", "medium", Action.COPY)
+            return FileClassification(Category.ARCHIVE, tr("reason.archive_ct_keywords"), "medium", Action.COPY)
+        return FileClassification(Category.ARCHIVE, tr("reason.archive_extension", extension=extension), "medium", Action.COPY)
     if extension in VIDEO_EXTENSIONS:
-        return FileClassification(Category.OTHER, f"Відеофайл {extension}", "medium", Action.KEEP)
+        return FileClassification(Category.VIDEO, tr("reason.video_extension", extension=extension), "medium", Action.KEEP)
 
     # Export formats commonly found near scanners and dental software.
     if extension in {".xml", ".json", ".html", ".htm"}:
-        return FileClassification(Category.DOCUMENT, f"Службовий/описовий формат {extension}", "medium", Action.COPY)
+        return FileClassification(Category.DOCUMENT, tr("reason.export_format", extension=extension), "medium", Action.COPY)
 
     if extension in {".dcm", ".dicom"}:
-        return FileClassification(Category.OTHER, "Розширення DICOM, але вміст не читається як DICOM", "low", Action.KEEP)
+        return FileClassification(Category.OTHER, tr("reason.dcm_unreadable"), "low", Action.KEEP)
 
     if re.search(r"(?:cache|temp|tmp)", text) and extension not in {".dcm", ".dicom"}:
-        return FileClassification(Category.JUNK, "Файл у папці cache/temp — перевірити вручну", "low", Action.KEEP)
+        return FileClassification(Category.JUNK, tr("reason.cache_folder"), "low", Action.KEEP)
 
-    return FileClassification(Category.OTHER, "Тип не визначено", "low", Action.KEEP)
+    return FileClassification(Category.OTHER, tr("reason.unknown_type"), "low", Action.KEEP)

@@ -16,6 +16,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from .i18n import tr
 from .models import Category, ScanItem
 
 # How many reverse links a study item may accumulate before we stop adding
@@ -63,7 +64,7 @@ def _inherit_patient(item: ScanItem, study: ScanItem, context_name: str) -> None
     if not item.study_date:
         item.study_date = study.study_date
     item.metadata.setdefault("study_description", context_name)
-    item.metadata["patient_context"] = "успадковано від DICOM-дослідження поруч"
+    item.metadata["patient_context"] = tr("meta.patient_inherited")
 
 
 def _link_study_context(items: list[ScanItem]) -> None:
@@ -92,9 +93,9 @@ def _link_study_context(items: list[ScanItem]) -> None:
                 or str(study.metadata.get("series_description", "")).strip()
                 or item.primary_path.parent.name
             )
-            item.add_link(study, "Дослідження цього пацієнта в тій самій папці")
+            item.add_link(study, tr("link.study_same_folder"))
             if len(study.links) < MAX_REVERSE_LINKS:
-                study.add_link(item, f"Супутній файл: {item.display_name}")
+                study.add_link(item, tr("link.companion_file", name=item.display_name))
             _inherit_patient(item, study, context_name)
             continue
 
@@ -104,14 +105,14 @@ def _link_study_context(items: list[ScanItem]) -> None:
         if len(keys) != 1 or keys == {"|"}:
             continue
         for study in studies[:5]:
-            item.add_link(study, "Дослідження цього пацієнта в тій самій папці")
+            item.add_link(study, tr("link.study_same_folder"))
             if len(study.links) < MAX_REVERSE_LINKS:
-                study.add_link(item, f"Супутній файл: {item.display_name}")
+                study.add_link(item, tr("link.companion_file", name=item.display_name))
         if not (item.patient_name or item.patient_id):
             item.patient_name = studies[0].patient_name
             item.patient_id = studies[0].patient_id
             item.metadata.setdefault("study_description", item.primary_path.parent.name)
-            item.metadata["patient_context"] = "успадковано від DICOM-досліджень пацієнта поруч"
+            item.metadata["patient_context"] = tr("meta.patient_inherited_multi")
 
 
 def _link_sidecars(items: list[ScanItem]) -> None:
@@ -133,7 +134,7 @@ def _link_sidecars(items: list[ScanItem]) -> None:
         for item in group:
             for other in group:
                 if other is not item:
-                    item.add_link(other, "Той самий базовий файл з іншим розширенням (sidecar)")
+                    item.add_link(other, tr("link.sidecar"))
 
 
 def _link_numbered_series(items: list[ScanItem]) -> None:
@@ -152,14 +153,14 @@ def _link_numbered_series(items: list[ScanItem]) -> None:
         if len(members) < 3:
             continue
         members.sort(key=lambda pair: pair[0])
-        label = f"{prefix.strip(' _-') or folder.name} ({len(members)} файлів)"
+        label = tr("series.label", prefix=prefix.strip(" _-") or folder.name, count=len(members))
         first = members[0][1]
         for _, member in members:
             member.metadata["series"] = label
         for index, (_, member) in enumerate(members[1:]):
-            member.add_link(first, f"Серія знімків: {label}")
+            member.add_link(first, tr("link.series", label=label))
             if index < 10:
-                first.add_link(member, f"Серія знімків: {label}")
+                first.add_link(member, tr("link.series", label=label))
 
 
 def link_related_items(items: list[ScanItem]) -> None:

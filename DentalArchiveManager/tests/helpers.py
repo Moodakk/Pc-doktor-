@@ -15,14 +15,16 @@ def write_test_dicom(
     patient_name: str = "Test^Patient",
     patient_id: str = "P-001",
     study_date: str = "20260806",
+    sop_class_uid: str | None = None,
 ) -> str:
     study_uid = study_uid or generate_uid()
+    storage_class = sop_class_uid or SecondaryCaptureImageStorage
     meta = FileMetaDataset()
-    meta.MediaStorageSOPClassUID = SecondaryCaptureImageStorage
+    meta.MediaStorageSOPClassUID = storage_class
     meta.MediaStorageSOPInstanceUID = generate_uid()
     meta.TransferSyntaxUID = ExplicitVRLittleEndian
     dataset = FileDataset(str(path), {}, file_meta=meta, preamble=b"\0" * 128)
-    dataset.SOPClassUID = SecondaryCaptureImageStorage
+    dataset.SOPClassUID = storage_class
     dataset.SOPInstanceUID = meta.MediaStorageSOPInstanceUID
     dataset.StudyInstanceUID = study_uid
     dataset.SeriesInstanceUID = generate_uid()

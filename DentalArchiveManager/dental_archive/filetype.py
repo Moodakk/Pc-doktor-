@@ -17,6 +17,7 @@ class Kind:
     ARCHIVE = "archive"
     MODEL_3D = "model_3d"
     VIDEO = "video"
+    VOLUME = "volume"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,8 +51,14 @@ _SIGNATURES: tuple[tuple[str, str, int, bytes], ...] = (
     ("ply", Kind.MODEL_3D, 0, b"ply\r\n"),
     ("vrml", Kind.MODEL_3D, 0, b"#VRML"),
     ("avi", Kind.VIDEO, 8, b"AVI "),
-    ("mkv", Kind.VIDEO, 0, b"\x1a\x45\xdf\xa3"),
+    ("matroska", Kind.VIDEO, 0, b"\x1a\x45\xdf\xa3"),
     ("wmv", Kind.VIDEO, 0, b"\x30\x26\xb2\x75"),
+    ("flv", Kind.VIDEO, 0, b"FLV\x01"),
+    ("mpeg", Kind.VIDEO, 0, b"\x00\x00\x01\xba"),
+    ("mpeg", Kind.VIDEO, 0, b"\x00\x00\x01\xb3"),
+    ("nrrd", Kind.VOLUME, 0, b"NRRD000"),
+    ("vtk", Kind.VOLUME, 0, b"# vtk DataFile"),
+    ("metaimage", Kind.VOLUME, 0, b"ObjectType"),
 )
 
 # Which sniffed formats are legitimate for each extension. An extension whose
@@ -89,9 +96,19 @@ EXTENSION_FORMATS: dict[str, frozenset[str]] = {
     ".mp4": frozenset({"mp4"}),
     ".m4v": frozenset({"mp4"}),
     ".mov": frozenset({"mp4"}),
+    ".3gp": frozenset({"mp4"}),
     ".avi": frozenset({"avi"}),
-    ".mkv": frozenset({"mkv"}),
+    ".mkv": frozenset({"matroska"}),
+    ".webm": frozenset({"matroska"}),
     ".wmv": frozenset({"wmv"}),
+    ".flv": frozenset({"flv"}),
+    ".mpg": frozenset({"mpeg"}),
+    ".mpeg": frozenset({"mpeg"}),
+    ".nii": frozenset({"nifti"}),
+    ".nrrd": frozenset({"nrrd"}),
+    ".mha": frozenset({"metaimage"}),
+    ".mhd": frozenset({"metaimage"}),
+    ".vtk": frozenset({"vtk"}),
 }
 
 
@@ -111,6 +128,13 @@ def _sniff_iso_media(header: bytes) -> SniffResult | None:
         if brand in {b"heic", b"heix", b"hevc", b"mif1", b"msf1"}:
             return SniffResult("heif", Kind.IMAGE)
         return SniffResult("mp4", Kind.VIDEO)
+    return None
+
+
+def _sniff_nifti(header: bytes) -> SniffResult | None:
+    # NIfTI-1: magic "n+1\0" or "ni1\0" at offset 344 of the 348-byte header.
+    if len(header) >= 348 and header[344:348] in {b"n+1\x00", b"ni1\x00"}:
+        return SniffResult("nifti", Kind.VOLUME)
     return None
 
 
@@ -145,7 +169,7 @@ def sniff_format(path: Path, size: int | None = None) -> SniffResult | None:
     if not header:
         return None
 
-    for result in (_sniff_riff(header), _sniff_iso_media(header), _sniff_stl(header, size)):
+    for result in (_sniff_riff(header), _sniff_iso_media(header), _sniff_nifti(header), _sniff_stl(header, size)):
         if result:
             return result
 
