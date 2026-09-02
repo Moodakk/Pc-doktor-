@@ -20,7 +20,7 @@ from .models import Category, ScanItem
 
 # How many reverse links a study item may accumulate before we stop adding
 # them (a CT folder can contain hundreds of companion files).
-_MAX_REVERSE_LINKS = 30
+MAX_REVERSE_LINKS = 30
 _SERIES_PATTERN = re.compile(r"^(.*?)(\d{1,6})$")
 _IMAGE_CATEGORIES = {Category.XRAY, Category.PHOTO, Category.IMAGE_REVIEW}
 
@@ -93,7 +93,7 @@ def _link_study_context(items: list[ScanItem]) -> None:
                 or item.primary_path.parent.name
             )
             item.add_link(study, "Дослідження цього пацієнта в тій самій папці")
-            if len(study.links) < _MAX_REVERSE_LINKS:
+            if len(study.links) < MAX_REVERSE_LINKS:
                 study.add_link(item, f"Супутній файл: {item.display_name}")
             _inherit_patient(item, study, context_name)
             continue
@@ -105,7 +105,7 @@ def _link_study_context(items: list[ScanItem]) -> None:
             continue
         for study in studies[:5]:
             item.add_link(study, "Дослідження цього пацієнта в тій самій папці")
-            if len(study.links) < _MAX_REVERSE_LINKS:
+            if len(study.links) < MAX_REVERSE_LINKS:
                 study.add_link(item, f"Супутній файл: {item.display_name}")
         if not (item.patient_name or item.patient_id):
             item.patient_name = studies[0].patient_name

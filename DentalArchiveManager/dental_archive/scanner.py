@@ -10,7 +10,7 @@ from typing import Callable, Iterable
 
 from .classifier import classify_dicom, classify_regular_file, read_dicom_info
 from .models import Action, Category, DicomInfo, ScanItem
-from .relations import link_related_items
+from .relations import MAX_REVERSE_LINKS, link_related_items
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -166,7 +166,8 @@ def _mark_exact_duplicates(items: list[ScanItem], warnings: list[str], progress:
             duplicate.confidence = "high"
             duplicate.suggested_action = Action.QUARANTINE
             duplicate.add_link(original, "Оригінал цього дубліката")
-            original.add_link(duplicate, f"Точний дублікат: {duplicate.primary_path}")
+            if len(original.links) < MAX_REVERSE_LINKS:
+                original.add_link(duplicate, f"Точний дублікат: {duplicate.primary_path}")
 
 
 def scan_roots(
