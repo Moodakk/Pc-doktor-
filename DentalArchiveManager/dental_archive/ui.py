@@ -10,7 +10,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from . import __version__, viewmodel
+from . import viewmodel
 from .filetype import Kind, sniff_format
 from .i18n import LANGUAGES, get_language, set_language, tr
 from .models import Action, Category, ScanItem
@@ -142,6 +142,8 @@ class DentalArchiveApp:
         for child in self.root.winfo_children():
             child.destroy()
         self.preview_photo = None
+        self._search_job = None
+        self._progress_mode = ""
         self.status_var.set(tr("ui.status.add_folders"))
         self._build_ui()
         self._refresh_tree()
@@ -362,9 +364,13 @@ class DentalArchiveApp:
 
     def _on_language_selected(self, _event: object) -> None:
         code = LANGUAGES[self.language_box.current()]
-        if code != get_language():
-            set_language(code)
-            self._rebuild_ui()
+        if code == get_language():
+            return
+        if self._busy:
+            self.language_box.current(LANGUAGES.index(get_language()))
+            return
+        set_language(code)
+        self._rebuild_ui()
 
     # -------------------------------------------------------------- source rows
 
@@ -795,7 +801,9 @@ class DentalArchiveApp:
         try:
             dataset = pydicom.dcmread(path)
             pixels = dataset.pixel_array
-            if pixels.ndim > 2:
+            if pixels.ndim == 3 and pixels.shape[-1] in (3, 4):
+                pass  # already an RGB(A) frame
+            elif pixels.ndim >= 3:
                 pixels = pixels[pixels.shape[0] // 2]
             pixels = pixels.astype("float32")
             low = float(pixels.min())
